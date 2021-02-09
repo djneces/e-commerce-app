@@ -1,23 +1,60 @@
-import React, { useEffect } from 'react';
+import Axios from 'axios';
+import { PayPalButton } from 'react-paypal-button-v2';
+import React, { useEffect, useState } from 'react';
 import { useDispatch, useSelector } from 'react-redux';
 import { Link } from 'react-router-dom';
-import { detailsOrder } from '../actions/orderActions';
+import { detailsOrder, payOrder } from '../actions/orderActions';
 import LoadingBox from '../components/LoadingBox';
 import MessageBox from '../components/MessageBox';
+import { ORDER_PAY_RESET } from '../constants/orderConstants';
 
 export default function OrderScreen(props) {
-  const orderId = props.match.params.id
-  const orderDetails = useSelector(state => state.orderDetails)
-  const { order, loading, error } = orderDetails
+  const orderId = props.match.params.id;
+  const [sdkReady, setSdkReady] = useState(false); //hook for paypal
+  const orderDetails = useSelector((state) => state.orderDetails);
+  const { order, loading, error } = orderDetails;
+
+  const orderPay = useSelector((state) => state.orderPay);
+  const { loading: loadingPay, error: errorPay, success: successPay } = orderPay; //renaming
   const dispatch = useDispatch();
 
   useEffect(() => {
-    dispatch(detailsOrder(orderId))
-  }, [dispatch, orderId]);
-  return loading 
-  ? (<LoadingBox></LoadingBox>) 
-  : error ? (<MessageBox variant='danger'>{error}</MessageBox>) :
-  (
+    const addPayPalScript = async () => {
+      const { data } = await Axios.get('/api/config/paypal');
+      const script = document.createElement('script');
+      script.type = 'text/javascript';
+      script.src = `https://www.paypal.com/sdk/js?client-id=${data}`;
+      script.async = true;
+      script.onload = () => {
+        setSdkReady(true);
+      };
+      document.body.appendChild(script);
+    };
+    if (!order || successPay || (order && order._id !== orderId)) {
+      dispatch({type: ORDER_PAY_RESET}) //after payment processed we need to reset, or we get infinite loop on confirmation page
+      //refresh the page
+      dispatch(detailsOrder(orderId));
+    } else {
+      if (!order.isPaid) {
+        if (!window.paypal) {
+          //if paypal not loaded
+          addPayPalScript();
+        } else {
+          setSdkReady(true);
+        }
+      }
+    }
+  }, [dispatch, successPay, order, orderId, sdkReady]);
+
+  const successPaymentHandler = (paymentResult) => {
+    dispatch(payOrder(order, paymentResult)); //paymentResult - result of the pmnt on paypal
+  };
+
+  return loading ? (
+    <LoadingBox></LoadingBox>
+  ) : error ? (
+    <MessageBox variant='danger'>{error}</MessageBox>
+  ) : (
     <div>
       <h1>Order {order._id}</h1>
       <div className='row top'>
@@ -33,10 +70,13 @@ export default function OrderScreen(props) {
                   {order.shippingAddress.postalCode},{' '}
                   {order.shippingAddress.country}
                 </p>
-                {order.isDelivered 
-                ? <MessageBox variant='success'>Delivered at {order.deliveredAt}</MessageBox>
-                : <MessageBox variant='danger'>Not Delivered</MessageBox>
-              }
+                {order.isDelivered ? (
+                  <MessageBox variant='success'>
+                    Delivered at {order.deliveredAt}
+                  </MessageBox>
+                ) : (
+                  <MessageBox variant='danger'>Not Delivered</MessageBox>
+                )}
               </div>
             </li>
             <li>
@@ -45,10 +85,13 @@ export default function OrderScreen(props) {
                 <p>
                   <strong>Method:</strong> {order.paymentMethod}
                 </p>
-                {order.isPaid 
-                ? <MessageBox variant='success'>Paid at {order.PaidAt}</MessageBox>
-                : <MessageBox variant='danger'>Not Paid</MessageBox>
-              }
+                {order.isPaid ? (
+                  <MessageBox variant='success'>
+                    Paid at {order.paidAt}
+                  </MessageBox>
+                ) : (
+                  <MessageBox variant='danger'>Not Paid</MessageBox>
+                )}
               </div>
             </li>
             <li>
@@ -116,6 +159,24 @@ export default function OrderScreen(props) {
                   </div>
                 </div>
               </li>
+              {!order.isPaid && ( //if not paid, created below
+                <li>
+                  {!sdkReady ? (
+                    <LoadingBox></LoadingBox>
+                  ) : (
+                    <>
+                      {errorPay && (
+                        <MessageBox variant='danger'>{errorPay}</MessageBox>
+                      )}
+                      {loadingPay && (<LoadingBox></LoadingBox>)}
+                      <PayPalButton
+                        amount={order.totalPrice}
+                        onSuccess={successPaymentHandler}
+                      ></PayPalButton>
+                    </>
+                  )}
+                </li>
+              )}
             </ul>
           </div>
         </div>
